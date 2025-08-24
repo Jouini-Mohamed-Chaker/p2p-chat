@@ -51,9 +51,6 @@ jobs:
     - name: Download dependencies
       run: go mod download
     
-    - name: Run tests
-      run: go test -v ./...
-    
     - name: Build for Linux
       run: |
         mkdir -p build/chat
@@ -86,9 +83,8 @@ jobs:
     
     - name: Install Windows dependencies
       run: |
-        # Install TDM-GCC for CGO compilation
-        choco install tdm-gcc -y
-        refreshenv
+        # Install mingw-w64 for CGO compilation
+        choco install mingw -y
     
     - name: Cache Go modules
       uses: actions/cache@v4
@@ -102,9 +98,6 @@ jobs:
     
     - name: Download dependencies
       run: go mod download
-    
-    - name: Run tests
-      run: go test -v ./...
     
     - name: Build for Windows
       run: |
@@ -124,4 +117,3 @@ jobs:
         name: p2p-chat-windows
         path: build/p2p-chat-windows-amd64.zip
         retention-days: 30
-

@@ -17,7 +17,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -27,16 +27,16 @@ jobs:
     - name: Install Fyne CLI
       run: go install fyne.io/fyne/v2/cmd/fyne@latest
 
-    - name: Build app
-      run: |
-        if [ "${{ matrix.os }}" == "windows" ]; then
-          GOOS=windows GOARCH=${{ matrix.arch }} go build -o chat-app.exe ./cmd/chat
-        else
-          GOOS=linux GOARCH=${{ matrix.arch }} go build -o chat-app ./cmd/chat
-        fi
+    - name: Build Linux binary
+      if: matrix.os == 'linux'
+      run: GOOS=linux GOARCH=${{ matrix.arch }} go build -o chat-app ./cmd/chat
+
+    - name: Build Windows binary
+      if: matrix.os == 'windows'
+      run: GOOS=windows GOARCH=${{ matrix.arch }} go build -o chat-app.exe ./cmd/chat
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: chat-app-${{ matrix.os }}
         path: |

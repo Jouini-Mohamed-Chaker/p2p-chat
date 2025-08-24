@@ -17,7 +17,7 @@ type ChatClient struct {
 	roomCode	string
 
 	// Connection state
-	isConnected bool
+isConnected bool
 	mu			sync.RWMutex
 
 	// Event callbacks

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -35,6 +36,11 @@ type ChatApp struct {
 	roomJoiningContainer  *fyne.Container
 	roomCodeEntry         *widget.Entry
 	answerCodeEntry       *widget.Entry
+
+	// Loading components
+	loadingContainer *fyne.Container
+	loadingLabel     *widget.Label
+	progressBar      *widget.ProgressBarInfinite
 
 	// Data
 	messages []string
@@ -77,6 +83,11 @@ func (ca *ChatApp) createComponents() {
 	// Status label
 	ca.statusLabel = widget.NewLabel("Enter your username to get started")
 
+	// Loading components
+	ca.loadingLabel = widget.NewLabel("Loading...")
+	ca.progressBar = widget.NewProgressBarInfinite()
+	ca.progressBar.Start()
+
 	// Message list
 	ca.messageList = widget.NewList(
 		func() int {
@@ -111,6 +122,33 @@ func (ca *ChatApp) createComponents() {
 	ca.answerCodeEntry.MultiLine = true
 }
 
+// showLoadingScreen shows a loading screen with a message
+func (ca *ChatApp) showLoadingScreen(message string, canCancel bool, cancelAction func()) {
+	ca.loadingLabel.SetText(message)
+	
+	var content *fyne.Container
+	if canCancel && cancelAction != nil {
+		cancelBtn := widget.NewButton("Cancel", cancelAction)
+		content = container.NewVBox(
+			widget.NewCard("", "", container.NewVBox(
+				ca.progressBar,
+				ca.loadingLabel,
+				widget.NewSeparator(),
+				cancelBtn,
+			)),
+		)
+	} else {
+		content = container.NewVBox(
+			widget.NewCard("", "", container.NewVBox(
+				ca.progressBar,
+				ca.loadingLabel,
+			)),
+		)
+	}
+
+	ca.window.SetContent(content)
+}
+
 // showUsernameView displays the username input screen
 func (ca *ChatApp) showUsernameView() {
 	usernameBtn := widget.NewButton("Continue", func() {
@@ -122,8 +160,15 @@ func (ca *ChatApp) showUsernameView() {
 		ca.createClient(username)
 	})
 
+	// Enable enter key for username
+	ca.usernameEntry.OnSubmitted = func(text string) {
+		if strings.TrimSpace(text) != "" {
+			usernameBtn.OnTapped()
+		}
+	}
+
 	content := container.NewVBox(
-		widget.NewCard("Welcome to P2P Chat", "", container.NewVBox(
+		widget.NewCard("Welcome to P2P Chat", "Choose a username to get started", container.NewVBox(
 			ca.usernameEntry,
 			usernameBtn,
 		)),
@@ -131,20 +176,31 @@ func (ca *ChatApp) showUsernameView() {
 	)
 
 	ca.window.SetContent(content)
+	ca.window.Canvas().Focus(ca.usernameEntry)
 }
 
 // createClient creates a new chat client and shows connection options
 func (ca *ChatApp) createClient(username string) {
-	var err error
-	ca.client, err = client.NewChatClient(username)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to create client: %v", err), ca.window)
-		return
-	}
+	ca.showLoadingScreen("Initializing chat client...", false, nil)
+	
+	// Run client creation in a goroutine to avoid blocking UI
+	go func() {
+		var err error
+		ca.client, err = client.NewChatClient(username)
+		
+		// Update UI in main thread
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to create client: %v", err), ca.window)
+				ca.showUsernameView() // Go back to username view
+				return
+			}
 
-	ca.username = username
-	ca.setupClientEventHandlers()
-	ca.showConnectionView()
+			ca.username = username
+			ca.setupClientEventHandlers()
+			ca.showConnectionView()
+		})
+	}()
 }
 
 // setupClientEventHandlers sets up event handlers for the chat client
@@ -171,7 +227,7 @@ func (ca *ChatApp) setupClientEventHandlers() {
 	ca.client.OnConnected(func() {
 		// Ensure UI updates happen on the main thread
 		fyne.Do(func() {
-			ca.statusLabel.SetText("Connected! You can now chat.")
+			ca.statusLabel.SetText("✅ Connected! You can now chat.")
 			ca.showChatView()
 		})
 	})
@@ -179,7 +235,7 @@ func (ca *ChatApp) setupClientEventHandlers() {
 	ca.client.OnDisconnected(func() {
 		// Ensure UI updates happen on the main thread
 		fyne.Do(func() {
-			ca.statusLabel.SetText("Disconnected from peer")
+			ca.statusLabel.SetText("❌ Disconnected from peer")
 			ca.addMessage("*** Connection lost")
 		})
 	})
@@ -188,6 +244,7 @@ func (ca *ChatApp) setupClientEventHandlers() {
 		// Ensure UI updates happen on the main thread
 		fyne.Do(func() {
 			ca.addMessage(fmt.Sprintf("*** Error: %v", err))
+			dialog.ShowError(err, ca.window)
 		})
 		log.Printf("Client error: %v", err)
 	})
@@ -195,76 +252,105 @@ func (ca *ChatApp) setupClientEventHandlers() {
 
 // showConnectionView displays the connection options (create or join room)
 func (ca *ChatApp) showConnectionView() {
-	createBtn := widget.NewButton("Create Room", ca.showCreateRoomView)
-	joinBtn := widget.NewButton("Join Room", ca.showJoinRoomView)
+	createBtn := widget.NewButton("🏠 Create Room", ca.showCreateRoomView)
+	createBtn.Importance = widget.HighImportance
+	
+	joinBtn := widget.NewButton("🚪 Join Room", ca.showJoinRoomView)
+	joinBtn.Importance = widget.MediumImportance
 
 	ca.connectContainer = container.NewVBox(
-		widget.NewCard("Connection", fmt.Sprintf("Hello, %s!", ca.username), container.NewVBox(
-			widget.NewLabel("Choose an option:"),
+		widget.NewCard("Connection Options", fmt.Sprintf("Welcome, %s!", ca.username), container.NewVBox(
+			widget.NewLabel("How would you like to connect?"),
+			widget.NewSeparator(),
 			createBtn,
 			joinBtn,
 		)),
 		ca.statusLabel,
 	)
 
+	ca.statusLabel.SetText("Choose how you want to connect with your friend")
 	ca.window.SetContent(ca.connectContainer)
 }
 
 // showCreateRoomView shows the room creation interface
 func (ca *ChatApp) showCreateRoomView() {
-	// Create room immediately
-	roomCode, err := ca.client.CreateRoom()
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to create room: %v", err), ca.window)
-		return
-	}
+	ca.showLoadingScreen("Creating room...", true, func() {
+		ca.showConnectionView()
+	})
 
+	// Create room in goroutine to avoid blocking UI
+	go func() {
+		roomCode, err := ca.client.CreateRoom()
+		
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to create room: %v", err), ca.window)
+				ca.showConnectionView()
+				return
+			}
+
+			ca.showRoomCreatedView(roomCode)
+		})
+	}()
+}
+
+// showRoomCreatedView shows the room code after successful creation
+func (ca *ChatApp) showRoomCreatedView(roomCode string) {
 	// Create a selectable entry for the room code
 	roomCodeDisplay := widget.NewEntry()
 	roomCodeDisplay.SetText(roomCode)
 	roomCodeDisplay.MultiLine = true
 	roomCodeDisplay.Wrapping = fyne.TextWrapWord
 
-	copyBtn := widget.NewButton("Copy Room Code", func() {
+	copyBtn := widget.NewButton("📋 Copy Code", func() {
 		ca.window.Clipboard().SetContent(roomCode)
-		ca.statusLabel.SetText("Room code copied to clipboard!")
+		ca.statusLabel.SetText("✅ Room code copied to clipboard!")
+		
+		// Reset status after 3 seconds
+		go func() {
+			time.Sleep(3 * time.Second)
+			fyne.Do(func() {
+				ca.statusLabel.SetText("Room created! Share the code with your friend.")
+			})
+		}()
 	})
+	copyBtn.Importance = widget.HighImportance
 
-	backBtn := widget.NewButton("Back", func() {
-		// Cancel the room creation
+	backBtn := widget.NewButton("← Back", func() {
 		if ca.client != nil {
 			ca.client.Disconnect()
 		}
 		ca.showConnectionView()
 	})
 
-	nextBtn := widget.NewButton("Continue", func() {
+	nextBtn := widget.NewButton("Continue →", func() {
 		ca.showWaitingForAnswerView()
 	})
+	nextBtn.Importance = widget.MediumImportance
 
 	ca.roomCreationContainer = container.NewVBox(
-		widget.NewCard("Room Created", "Share this code with your friend", container.NewVBox(
+		widget.NewCard("🎉 Room Created!", "Share this code with your friend", container.NewVBox(
 			widget.NewLabel("Room Code:"),
 			roomCodeDisplay,
 			copyBtn,
 			widget.NewSeparator(),
-			widget.NewLabel("Click Continue after sharing the code"),
+			widget.NewLabel("📤 Share the code, then click Continue"),
 			container.NewHBox(backBtn, nextBtn),
 		)),
 		ca.statusLabel,
 	)
 
-	ca.statusLabel.SetText("Room created! Share the room code with your friend.")
+	ca.statusLabel.SetText("Room created! Share the code with your friend.")
 	ca.window.SetContent(ca.roomCreationContainer)
 }
 
 // showWaitingForAnswerView shows interface waiting for answer code
 func (ca *ChatApp) showWaitingForAnswerView() {
-	backBtn := widget.NewButton("Back", func() {
-		ca.showCreateRoomView()
+	backBtn := widget.NewButton("← Back", func() {
+		ca.showRoomCreatedView("") // You might want to store the room code
 	})
 
-	connectBtn := widget.NewButton("Connect", func() {
+	connectBtn := widget.NewButton("🔗 Connect", func() {
 		answerCode := strings.TrimSpace(ca.answerCodeEntry.Text)
 		if answerCode == "" {
 			dialog.ShowError(fmt.Errorf("answer code cannot be empty"), ca.window)
@@ -272,12 +358,20 @@ func (ca *ChatApp) showWaitingForAnswerView() {
 		}
 		ca.acceptAnswer(answerCode)
 	})
+	connectBtn.Importance = widget.HighImportance
+
+	// Enable enter key for answer code
+	ca.answerCodeEntry.OnSubmitted = func(text string) {
+		if strings.TrimSpace(text) != "" {
+			connectBtn.OnTapped()
+		}
+	}
 
 	// Clear previous answer code
 	ca.answerCodeEntry.SetText("")
 
 	waitingContainer := container.NewVBox(
-		widget.NewCard("Waiting for Friend", "Enter the answer code from your friend", container.NewVBox(
+		widget.NewCard("⏳ Waiting for Friend", "Enter the answer code from your friend", container.NewVBox(
 			widget.NewLabel("Answer Code:"),
 			ca.answerCodeEntry,
 			container.NewHBox(backBtn, connectBtn),
@@ -285,17 +379,18 @@ func (ca *ChatApp) showWaitingForAnswerView() {
 		ca.statusLabel,
 	)
 
-	ca.statusLabel.SetText("Waiting for answer code from your friend...")
+	ca.statusLabel.SetText("⏳ Waiting for answer code from your friend...")
 	ca.window.SetContent(waitingContainer)
+	ca.window.Canvas().Focus(ca.answerCodeEntry)
 }
 
 // showJoinRoomView shows the room joining interface
 func (ca *ChatApp) showJoinRoomView() {
-	backBtn := widget.NewButton("Back", func() {
+	backBtn := widget.NewButton("← Back", func() {
 		ca.showConnectionView()
 	})
 
-	joinBtn := widget.NewButton("Join Room", func() {
+	joinBtn := widget.NewButton("🚪 Join Room", func() {
 		roomCode := strings.TrimSpace(ca.roomCodeEntry.Text)
 		if roomCode == "" {
 			dialog.ShowError(fmt.Errorf("room code cannot be empty"), ca.window)
@@ -303,12 +398,20 @@ func (ca *ChatApp) showJoinRoomView() {
 		}
 		ca.joinRoom(roomCode)
 	})
+	joinBtn.Importance = widget.HighImportance
+
+	// Enable enter key for room code
+	ca.roomCodeEntry.OnSubmitted = func(text string) {
+		if strings.TrimSpace(text) != "" {
+			joinBtn.OnTapped()
+		}
+	}
 
 	// Clear previous room code
 	ca.roomCodeEntry.SetText("")
 
 	ca.roomJoiningContainer = container.NewVBox(
-		widget.NewCard("Join Room", "Enter the room code from your friend", container.NewVBox(
+		widget.NewCard("🚪 Join Room", "Enter the room code from your friend", container.NewVBox(
 			widget.NewLabel("Room Code:"),
 			ca.roomCodeEntry,
 			container.NewHBox(backBtn, joinBtn),
@@ -316,19 +419,31 @@ func (ca *ChatApp) showJoinRoomView() {
 		ca.statusLabel,
 	)
 
-	ca.statusLabel.SetText("Enter the room code to join...")
+	ca.statusLabel.SetText("📥 Enter the room code to join...")
 	ca.window.SetContent(ca.roomJoiningContainer)
+	ca.window.Canvas().Focus(ca.roomCodeEntry)
 }
 
 // joinRoom joins an existing room
 func (ca *ChatApp) joinRoom(roomCode string) {
-	answerCode, err := ca.client.JoinRoom(roomCode)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to join room: %v", err), ca.window)
-		return
-	}
+	ca.showLoadingScreen("Joining room...", true, func() {
+		ca.showJoinRoomView()
+	})
 
-	ca.showAnswerCodeView(answerCode)
+	// Join room in goroutine
+	go func() {
+		answerCode, err := ca.client.JoinRoom(roomCode)
+		
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to join room: %v", err), ca.window)
+				ca.showJoinRoomView()
+				return
+			}
+
+			ca.showAnswerCodeView(answerCode)
+		})
+	}()
 }
 
 // showAnswerCodeView shows the answer code that needs to be shared
@@ -339,13 +454,21 @@ func (ca *ChatApp) showAnswerCodeView(answerCode string) {
 	answerCodeDisplay.MultiLine = true
 	answerCodeDisplay.Wrapping = fyne.TextWrapWord
 
-	copyBtn := widget.NewButton("Copy Answer Code", func() {
+	copyBtn := widget.NewButton("📋 Copy Code", func() {
 		ca.window.Clipboard().SetContent(answerCode)
-		ca.statusLabel.SetText("Answer code copied to clipboard!")
+		ca.statusLabel.SetText("✅ Answer code copied to clipboard!")
+		
+		// Reset status after 3 seconds
+		go func() {
+			time.Sleep(3 * time.Second)
+			fyne.Do(func() {
+				ca.statusLabel.SetText("📤 Share this code and wait for connection...")
+			})
+		}()
 	})
+	copyBtn.Importance = widget.HighImportance
 
-	backBtn := widget.NewButton("Back", func() {
-		// Cancel the join attempt
+	backBtn := widget.NewButton("← Back", func() {
 		if ca.client != nil {
 			ca.client.Disconnect()
 		}
@@ -353,66 +476,80 @@ func (ca *ChatApp) showAnswerCodeView(answerCode string) {
 	})
 
 	answerContainer := container.NewVBox(
-		widget.NewCard("Share Answer Code", "Send this code to the room creator", container.NewVBox(
+		widget.NewCard("📤 Share Answer Code", "Send this code to the room creator", container.NewVBox(
 			widget.NewLabel("Answer Code:"),
 			answerCodeDisplay,
 			copyBtn,
 			widget.NewSeparator(),
-			widget.NewLabel("Waiting for connection..."),
+			widget.NewLabel("⏳ Waiting for connection..."),
 			backBtn,
 		)),
 		ca.statusLabel,
 	)
 
-	ca.statusLabel.SetText("Share this answer code with the room creator and wait for connection...")
+	ca.statusLabel.SetText("📤 Share this code and wait for connection...")
 	ca.window.SetContent(answerContainer)
 }
 
 // acceptAnswer accepts an answer code
 func (ca *ChatApp) acceptAnswer(answerCode string) {
-	err := ca.client.AcceptAnswer(answerCode)
-	if err != nil {
-		dialog.ShowError(fmt.Errorf("failed to accept answer: %v", err), ca.window)
-		return
-	}
+	ca.showLoadingScreen("Establishing connection...", true, func() {
+		ca.showWaitingForAnswerView()
+	})
 
-	ca.statusLabel.SetText("Answer accepted! Establishing connection...")
+	// Accept answer in goroutine
+	go func() {
+		err := ca.client.AcceptAnswer(answerCode)
+		
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("failed to accept answer: %v", err), ca.window)
+				ca.showWaitingForAnswerView()
+				return
+			}
+
+			ca.statusLabel.SetText("🤝 Connection established! Finalizing...")
+		})
+	}()
 }
 
 // showChatView displays the main chat interface
 func (ca *ChatApp) showChatView() {
 	// Send button
-	sendBtn := widget.NewButton("Send", func() {
+	sendBtn := widget.NewButton("📤 Send", func() {
 		text := strings.TrimSpace(ca.messageEntry.Text)
 		if text != "" {
 			ca.sendMessage(text)
 		}
 	})
+	sendBtn.Importance = widget.HighImportance
 
 	// Message input area
 	messageArea := container.NewBorder(nil, nil, nil, sendBtn, ca.messageEntry)
 
 	// Disconnect button
-	disconnectBtn := widget.NewButton("Disconnect", func() {
+	disconnectBtn := widget.NewButton("🔌 Disconnect", func() {
 		ca.disconnect()
 	})
+	disconnectBtn.Importance = widget.DangerImportance
 
-	// Status area
-	statusArea := container.NewBorder(nil, nil, nil, disconnectBtn, ca.statusLabel)
+	// Status area with better formatting
+	statusArea := container.NewBorder(nil, nil, ca.statusLabel, disconnectBtn, nil)
 
 	// Main chat container
 	ca.chatContainer = container.NewBorder(
-		statusArea,    // top
-		messageArea,   // bottom
-		nil,          // left
-		nil,          // right
+		statusArea,     // top
+		messageArea,    // bottom
+		nil,           // left
+		nil,           // right
 		ca.messageList, // center
 	)
 
 	ca.window.SetContent(ca.chatContainer)
 
-	// Focus on message entry
+	// Focus on message entry and add welcome message
 	ca.window.Canvas().Focus(ca.messageEntry)
+	ca.addMessage("🎉 Connected! Start chatting...")
 }
 
 // sendMessage sends a message to the peer
@@ -446,20 +583,26 @@ func (ca *ChatApp) addMessage(message string) {
 
 // disconnect disconnects from the current session
 func (ca *ChatApp) disconnect() {
-	if ca.client != nil {
-		err := ca.client.Disconnect()
-		if err != nil {
-			log.Printf("Error disconnecting: %v", err)
-		}
-		ca.client = nil
-	}
-
-	// Reset UI state
-	ca.messages = make([]string, 0)
-	ca.messageList.Refresh()
+	ca.showLoadingScreen("Disconnecting...", false, nil)
 	
-	// Go back to connection view
-	ca.showConnectionView()
+	go func() {
+		if ca.client != nil {
+			err := ca.client.Disconnect()
+			if err != nil {
+				log.Printf("Error disconnecting: %v", err)
+			}
+			ca.client = nil
+		}
+
+		fyne.Do(func() {
+			// Reset UI state
+			ca.messages = make([]string, 0)
+			ca.messageList.Refresh()
+			
+			// Go back to connection view
+			ca.showConnectionView()
+		})
+	}()
 }
 
 // Close handles application cleanup

@@ -1,0 +1,44 @@
+name: Build Fyne App
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        os: [linux, windows]
+        arch: [amd64]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: 1.25
+
+    - name: Install Fyne CLI
+      run: go install fyne.io/fyne/v2/cmd/fyne@latest
+
+    - name: Build app
+      run: |
+        if [ "${{ matrix.os }}" == "windows" ]; then
+          GOOS=windows GOARCH=${{ matrix.arch }} go build -o chat-app.exe ./cmd/chat
+        else
+          GOOS=linux GOARCH=${{ matrix.arch }} go build -o chat-app ./cmd/chat
+        fi
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: chat-app-${{ matrix.os }}
+        path: |
+          chat-app
+          chat-app.exe

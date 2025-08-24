@@ -1,54 +1,127 @@
-name: Build Fyne App
+name: Build P2P Chat App
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  release:
+    types: [ published ]
 
 jobs:
   build-linux:
+    name: Build Linux
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.25
-
-      - name: Install Fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
-
-      - name: Build Linux binary
-        run: go build -o chat-app ./cmd/chat
-
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: chat-app-linux
-          path: chat-app
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25.0'
+    
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libgl1-mesa-dev \
+          xorg-dev \
+          libx11-dev \
+          libxrandr-dev \
+          libxinerama-dev \
+          libxcursor-dev \
+          libxi-dev \
+          libxext-dev \
+          libxfixes-dev \
+          gcc \
+          pkg-config
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run tests
+      run: go test -v ./...
+    
+    - name: Build for Linux
+      run: |
+        mkdir -p build/chat
+        go build -v -o build/chat/p2p-chat-linux ./cmd/chat
+    
+    - name: Create Linux tarball
+      run: |
+        cd build
+        tar -czf p2p-chat-linux-amd64.tar.gz chat/
+    
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: p2p-chat-linux
+        path: build/p2p-chat-linux-amd64.tar.gz
+        retention-days: 30
 
   build-windows:
+    name: Build Windows
     runs-on: windows-latest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25.0'
+    
+    - name: Install Windows dependencies
+      run: |
+        # Install TDM-GCC for CGO compilation
+        choco install tdm-gcc -y
+        refreshenv
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~\AppData\Local\go-build
+          ~\go\pkg\mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run tests
+      run: go test -v ./...
+    
+    - name: Build for Windows
+      run: |
+        mkdir -p build\chat
+        go build -v -o build\chat\p2p-chat-windows.exe .\cmd\chat
+      env:
+        CGO_ENABLED: 1
+    
+    - name: Create Windows zip
+      run: |
+        cd build
+        Compress-Archive -Path chat\ -DestinationPath p2p-chat-windows-amd64.zip
+    
+    - name: Upload Windows artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: p2p-chat-windows
+        path: build/p2p-chat-windows-amd64.zip
+        retention-days: 30
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: 1.25
-
-      - name: Install Fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
-
-      - name: Build Windows binary
-        run: go build -o chat-app.exe ./cmd/chat
-
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: chat-app-windows
-          path: chat-app.exe
